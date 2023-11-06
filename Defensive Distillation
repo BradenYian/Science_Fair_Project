@@ -1,0 +1,141 @@
+import tensorflow as tf
+from tensorflow.keras import datasets, models, layers
+from tensorflow.keras.applications import ResNet50V2
+from tensorflow.keras.utils import to_categorical
+import tensorflow as tf
+from tensorflow.keras import datasets, models, layers, optimizers
+from tensorflow.keras.applications import ResNet50V2
+from tensorflow.keras.utils import to_categorical
+from tensorflow.keras.callbacks import TensorBoard, ModelCheckpoint, LearningRateScheduler
+import datetime
+import matplotlib.pyplot as plt
+
+
+# ...
+
+# Define a learning rate schedule
+def lr_schedule(epoch):
+    initial_learning_rate = 0.001
+    if epoch < 10:
+        return initial_learning_rate
+    elif epoch < 20:
+        return initial_learning_rate * 0.1
+    else:
+        return initial_learning_rate * 0.01
+
+
+# Callbacks for TensorBoard and model checkpointing
+log_dir = "logs/fit/" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+tensorboard_callback = TensorBoard(log_dir=log_dir, histogram_freq=1)
+#checkpoint_callback = ModelCheckpoint("best_model.h5", monitor="val_loss", save_best_only=True, mode="min")
+
+
+# Load CIFAR-10 dataset
+(train_images, train_labels), (test_images, test_labels) = datasets.cifar10.load_data()
+train_images, test_images = train_images / 255.0, test_images / 255.0
+train_labels, test_labels = to_categorical(train_labels, num_classes=10), to_categorical(test_labels, num_classes=10)
+
+# Define ResNet model
+def build_resnet():
+    base_model = ResNet50V2(weights='imagenet', include_top=False, input_shape=(32, 32, 3))
+    x = layers.BatchNormalization()(base_model.output)
+    x = layers.GlobalAveragePooling2D()(base_model.output)
+    x = layers.Dense(10, activation='relu')(x)
+    predictions = layers.Dense(10, activation='softmax')(x)
+    model = models.Model(inputs=base_model.input, outputs=predictions)
+    return model
+
+
+# Define FGSM attack
+def fgsm_attack(model, x, y_true, epsilon):
+    loss_object = tf.keras.losses.CategoricalCrossentropy()
+    # Convert your input data (e.g., numpy array) to TensorFlow tensor
+    input_data = tf.convert_to_tensor(x)
+    with tf.GradientTape() as tape:
+        tape.watch(input_data)
+        prediction = model(input_data)
+        loss = loss_object(y_true, prediction)
+    gradient = tape.gradient(loss, input_data)
+    x_adv = input_data + epsilon * tf.sign(gradient)
+    x_adv = tf.clip_by_value(x_adv, 0, 1)
+    return x_adv
+
+teacher_model = build_resnet()
+student_model = build_resnet()
+
+# Define defensive distillation function
+def defensive_distillation(teacher_model, student_model, train_images, train_labels, temperature, epochs, batch_size):
+    optimizer = tf.keras.optimizers.Adam(learning_rate=0.001)
+    loss_object = tf.keras.losses.KLDivergence()
+
+    for epoch in range(epochs):
+        print(f"Epoch {epoch + 1}/{epochs}")
+        for batch_start in range(0, len(train_images), batch_size):
+            batch_images = train_images[batch_start:batch_start + batch_size]
+            batch_labels = train_labels[batch_start:batch_start + batch_size]
+
+            with tf.GradientTape() as tape:
+                # Forward pass with teacher model (soft targets)
+                teacher_logits = teacher_model(batch_images)
+                teacher_probs = tf.nn.softmax(teacher_logits / temperature)
+
+                # Forward pass with student model
+                student_logits = student_model(batch_images)
+
+                # Calculate the Kullback-Leibler (KL) divergence loss
+                loss = loss_object(teacher_probs, tf.nn.softmax(student_logits / temperature))
+
+            # Compute gradients based on the KL divergence loss and update student model weights
+            gradients = tape.gradient(loss, student_model.trainable_variables)
+            optimizer.apply_gradients(zip(gradients, student_model.trainable_variables))
+
+            print(f"Batch {batch_start // batch_size + 1}/{len(train_images) // batch_size}")
+
+# Example usage:
+temperature = 5.0
+epochs = 10
+batch_size = 32
+
+
+
+# Training hyperparameters
+epsilon_fgsm = 0.1  # FGSM perturbation level
+
+
+# Defensive Distillation
+Defensive_Distillation_Model = defensive_distillation(teacher_model, student_model, train_images, train_labels, temperature, epochs, batch_size)
+
+# Build ResNet model
+resnet_model = build_resnet()
+resnet_model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
+
+
+
+
+# Evaluate the model with FGSM attack on the test data
+test_images_adv = fgsm_attack(resnet_model, test_images, test_labels, epsilon_fgsm)
+test_loss_adv, test_accuracy_adv = resnet_model.evaluate(test_images_adv, test_labels)
+print(f"Test accuracy of the Resnet Model with FGSM attack: {test_accuracy_adv}")
+
+# Evaluate the model with FGSM attack on the test data
+test_images_adv = fgsm_attack(Defensive_Distiallation_Model, test_images, test_labels, epsilon_fgsm)
+test_loss_adv, test_accuracy_adv = Advesarially_trained_model.evaluate(test_images_adv, test_labels)
+print(f"Test accuracy of an Advesarially Trained Resnet Model with FGSM attack: {test_accuracy_adv}")
+
+
+
+# Visualize some adversarial examples
+num_examples = 5
+for i in range(num_examples):
+    original_image = test_images[i]
+    adversarial_image = test_images_adv[i]
+
+    plt.subplot(2, num_examples, i + 1)
+    plt.imshow(original_image)
+    plt.title("Original")
+
+    plt.subplot(2, num_examples, i + num_examples + 1)
+    plt.imshow(adversarial_image)
+    plt.title("Adversarial")
+
+plt.show()
