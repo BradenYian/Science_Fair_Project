@@ -1,11 +1,17 @@
-# example code from other paper. 
-
-https://github.com/as791/Adversarial-Example-Attack-and-Defense/tree/master
 
 
 # Science_Fair_Project
 
 Adversarial learning is a machine learning paradigm where the model is trained to be robust against adversarial examples. Adversarial examples are inputs specifically crafted to deceive the model and cause misclassification. Defending against adversarial attacks is crucial for the deployment of machine learning models in real-world scenarios. Here's a literature review on defense methods for adversarial learning:
+
+
+# example code from other paper. 
+
+https://github.com/as791/Adversarial-Example-Attack-and-Defense/tree/master
+
+
+### https://viso.ai/deep-learning/adversarial-machine-learning/#:~:text=to%20every%20feature.-,Jacobian%2Dbased%20Saliency%20Map%20Attack%20(JSMA),saliency%20value%20by%20decreasing%20order.
+
 
 ## Adversarial Training:
 Description: Adversarial training involves augmenting the training dataset with adversarial examples, forcing the model to learn from both clean and adversarial data.
