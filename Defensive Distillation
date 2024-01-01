@@ -3,7 +3,7 @@ from tensorflow.keras import datasets, models, layers
 from tensorflow.keras.applications import ResNet50V2
 from tensorflow.keras.utils import to_categorical
 from tensorflow.keras.datasets import mnist
-import matplotlib.pyplot as plt
+from tensorflow.keras import models, layers
 
 # MNIST Dataset
 (train_images, train_labels), (test_images, test_labels) = mnist.load_data()
@@ -17,32 +17,38 @@ test_images = tf.image.grayscale_to_rgb(tf.image.resize(test_images[..., tf.newa
 train_labels = to_categorical(train_labels, num_classes=10)
 test_labels = to_categorical(test_labels, num_classes=10)
 
-# Define ResNet model
-def build_resnet(input_shape=(32, 32, 3), num_classes=10, teacher=False):
-    base_model = ResNet50V2(weights='imagenet', include_top=False, input_shape=input_shape)
-    x = layers.BatchNormalization()(base_model.output)
+
+def build_resnet(teacher=False):
+    model_input = layers.Input(shape=(32, 32, 3))
+    
+    x = layers.Conv2D(32, (3, 3), activation='relu')(model_input)
+    x = layers.BatchNormalization()(x)
+    x = layers.MaxPooling2D((2, 2))(x)
+    
+    x = layers.Conv2D(64, (3, 3), activation='relu')(x)
+    x = layers.BatchNormalization()(x)
+    x = layers.MaxPooling2D((2, 2))(x)
+    
     x = layers.GlobalAveragePooling2D()(x)
-
-    if teacher:
-        x = layers.Dense(256, activation='relu')(x)  # Dense layer for the teacher model
-
-    predictions = layers.Dense(num_classes, activation='softmax')(x)
-
-    model_name = 'teacher_model' if teacher else 'student_model'
-    model = models.Model(inputs=base_model.input, outputs=predictions, name=model_name)
-
+    
+    x = layers.Dense(256, activation='relu')(x)
+    x = layers.Dropout(0.25)(x)
+    
+    predictions = layers.Dense(10, activation='softmax')(x)
+    
+    model = models.Model(inputs=model_input, outputs=predictions)
     return model
 
 
 # Define FGSM attack
-def fgsm_attack(model, x, y_true, epsilon):
+def fgsm_attack(model, x, y_true, epsilon, temperature):
     loss_object = tf.keras.losses.CategoricalCrossentropy()
     input_data = tf.convert_to_tensor(x)
 
     with tf.GradientTape() as tape:
         tape.watch(input_data)
         prediction = model(input_data)
-        teacher_probs = tf.nn.softmax(prediction / temperature)  # Use softmax on model output directly
+        teacher_probs = tf.nn.softmax(prediction / temperature)
         loss = loss_object(y_true, teacher_probs)
 
     gradient = tape.gradient(loss, input_data)
@@ -50,19 +56,16 @@ def fgsm_attack(model, x, y_true, epsilon):
     x_adv = tf.clip_by_value(x_adv, 0, 1)
     return x_adv
 
-
-
 # Create teacher and student models
 teacher_model = build_resnet(teacher=True)
 student_model = build_resnet(teacher=False)
 
 # Compile the Defensive Distillation model
-student_model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
+student_model.compile(optimizer='adam', metrics=['accuracy'])
 
-# Define defensive distillation function
-def defensive_distillation(teacher_model, student_model, train_images, train_labels, temperature, epochs, batch_size):
-    optimizer = tf.keras.optimizers.Adam(learning_rate=0.001)
-    loss_object = tf.keras.losses.KLDivergence()
+def defensive_distillation(teacher_model, student_model, train_images, train_labels, teacher_temperature, student_temperature, epochs, batch_size):
+    optimizer = tf.keras.optimizers.Adam()
+    loss_object = tf.keras.losses.CategoricalCrossentropy()
 
     for epoch in range(epochs):
         print(f"Epoch {epoch + 1}/{epochs}")
@@ -72,52 +75,48 @@ def defensive_distillation(teacher_model, student_model, train_images, train_lab
 
             with tf.GradientTape() as tape:
                 teacher_logits = teacher_model(batch_images)
-                teacher_probs = tf.nn.softmax(teacher_logits / temperature)
+                teacher_probs = tf.nn.softmax(teacher_logits / teacher_temperature)
                 student_logits = student_model(batch_images)
-                loss = loss_object(teacher_probs, tf.nn.softmax(student_logits / temperature))
+                loss = loss_object(teacher_probs, tf.nn.softmax(student_logits / student_temperature))
 
             gradients = tape.gradient(loss, student_model.trainable_variables)
             optimizer.apply_gradients(zip(gradients, student_model.trainable_variables))
 
-            print(f"Batch {batch_start // batch_size + 1}/{len(train_images) // batch_size}")
+           # Evaluate accuracy after each batch
+            metrics_values = student_model.evaluate(batch_images, batch_labels, verbose=0)
+            metrics_names = student_model.metrics_names
+            metrics_dict = dict(zip(metrics_names, metrics_values))
+
+            print(f"Batch {batch_start // batch_size + 1}/{len(train_images) // batch_size}, Training Metrics: {metrics_dict}")
 
     return student_model
 
 # Example usage:
-temperature = 5.0
-epochs = 2
+teacher_temperature = 10
+student_temperature = 5
+epochs = 10
 batch_size = 256
 
 # Training hyperparameters
-epsilon_fgsm = 0.1
+epsilon_fgsm = 0.3
 
 # Defensive Distillation
-Defensive_Distillation_Model = defensive_distillation(teacher_model, student_model, train_images, train_labels, temperature, epochs, batch_size)
+#Defensive_Distillation_Model = defensive_distillation(teacher_model, student_model, train_images, train_labels, temperature, epochs, batch_size)
 
-#Compile
-Defensive_Distillation_Model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
+# Compile
+#Defensive_Distillation_Model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
+
 
 # Evaluate the model with FGSM attack on the test data
-test_images_adv_defense = fgsm_attack(Defensive_Distillation_Model, test_images, test_labels, epsilon_fgsm)
-test_loss_adv_defense, test_accuracy_adv_defense = Defensive_Distillation_Model.evaluate(test_images_adv_defense, test_labels)
-print(f"Test accuracy of a Defensive Distillation Trained Model with FGSM attack: {test_accuracy_adv_defense}")
+#test_images_adv_defense = fgsm_attack(Defensive_Distillation_Model, test_images, test_labels, epsilon_fgsm, temperature)
 
-# Visualize some adversarial examples
-num_examples = 5
-plt.figure(figsize=(10, 4))
+# Evaluate the model on the adversarial examples
+#test_loss_adv_defense, test_accuracy_adv_defense = Defensive_Distillation_Model.evaluate(test_images_adv_defense, test_labels)
+#print(f"Test accuracy of a Defensive Distillation Trained Model with FGSM attack: {test_accuracy_adv_defense}")
 
-for i in range(num_examples):
-    original_image = test_images[i]
-    adversarial_image = fgsm_attack(Defensive_Distillation_Model, tf.expand_dims(original_image, 0), test_labels[i], epsilon_fgsm)[0]
+# Defensive Distillation
+Defensive_Distillation_Model = defensive_distillation(teacher_model, student_model, train_images, train_labels, teacher_temperature, student_temperature, epochs, batch_size)
 
-    plt.subplot(2, num_examples, i + 1)
-    plt.imshow(original_image)  # Remove cmap for RGB images
-    plt.title("Original")
-    plt.axis('off')
-
-    plt.subplot(2, num_examples, i + num_examples + 1)
-    plt.imshow(adversarial_image.numpy())  # Remove cmap for RGB images
-    plt.title("Adversarial")
-    plt.axis('off')
-
-plt.show()
+# Evaluate the model on the test data
+test_loss_defense, test_accuracy_defense = Defensive_Distillation_Model.evaluate(test_images, test_labels)
+print(f"Test accuracy of a Defensive Distillation Trained Model: {test_accuracy_defense}")
