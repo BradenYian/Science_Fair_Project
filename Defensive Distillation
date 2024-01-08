@@ -18,26 +18,39 @@ train_labels = to_categorical(train_labels, num_classes=10)
 test_labels = to_categorical(test_labels, num_classes=10)
 
 
-def build_resnet(teacher=False):
-    model_input = layers.Input(shape=(32, 32, 3))
-    
-    x = layers.Conv2D(32, (3, 3), activation='relu')(model_input)
-    x = layers.BatchNormalization()(x)
-    x = layers.MaxPooling2D((2, 2))(x)
-    
-    x = layers.Conv2D(64, (3, 3), activation='relu')(x)
-    x = layers.BatchNormalization()(x)
-    x = layers.MaxPooling2D((2, 2))(x)
-    
-    x = layers.GlobalAveragePooling2D()(x)
-    
-    x = layers.Dense(256, activation='relu')(x)
-    x = layers.Dropout(0.25)(x)
-    
+def build_resnet(teacher=False, pretrained_model=None):
+    if pretrained_model is not None:
+        model_input = pretrained_model.input
+        x = pretrained_model.layers[-2].output  # Output before the last Dense layer
+    else:
+        model_input = layers.Input(shape=(32, 32, 3))
+        x = layers.Conv2D(32, (3, 3), activation='relu')(model_input)
+        x = layers.BatchNormalization()(x)
+        x = layers.MaxPooling2D((2, 2))(x)
+        x = layers.Conv2D(64, (3, 3), activation='relu')(x)
+        x = layers.BatchNormalization()(x)
+        x = layers.Conv2D(128, (3, 3), activation='relu')(x)
+        x = layers.BatchNormalization()(x)
+        x = layers.MaxPooling2D((2, 2))(x)
+        x = layers.GlobalAveragePooling2D()(x)
+
+    if not teacher:
+        x = layers.Dense(256, activation='relu')(x)
+        x = layers.Dropout(0.25)(x)
+
     predictions = layers.Dense(10, activation='softmax')(x)
-    
+
     model = models.Model(inputs=model_input, outputs=predictions)
+
+    if pretrained_model is not None:
+        for layer in model.layers[:-2]:
+            if layer.name in [l.name for l in pretrained_model.layers]:
+                pretrained_layer = pretrained_model.get_layer(layer.name)
+                layer.set_weights(pretrained_layer.get_weights())
+                layer.trainable = False
+
     return model
+
 
 
 # Define FGSM attack
@@ -56,12 +69,62 @@ def fgsm_attack(model, x, y_true, epsilon, temperature):
     x_adv = tf.clip_by_value(x_adv, 0, 1)
     return x_adv
 
-# Create teacher and student models
-teacher_model = build_resnet(teacher=True)
-student_model = build_resnet(teacher=False)
+epochs_regular = 5
+# Example usage:
+teacher_temperature = 10
+student_temperature = 5
+epochs = 2
+batch_size = 256
 
+resnet_model = build_resnet()
+resnet_model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
+
+# Train and evaluate the model before adversarial training
+print("Training and evaluating the ResNet Model before Defensive Distillation training:")
+history = resnet_model.fit(train_images, train_labels, epochs=epochs_regular, batch_size=batch_size, verbose=1)
+test_loss, test_accuracy = resnet_model.evaluate(test_images, test_labels, verbose=0)
+print(f"Test accuracy of the ResNet Model before adversarial training: {test_accuracy}")
+
+# Save the entire model after regular training
+model_file_path = r'C:\Users\eyian\OneDrive\Desktop\defensive_distillation.h5'
+resnet_model.save(model_file_path + '.h5')
+
+# Load the saved model for adversarial training
+loaded_model = tf.keras.models.load_model(model_file_path + '.h5')
+
+# Additional code snippet
+print("Loaded Model Layers:")
+for layer in loaded_model.layers:
+    print(layer.name)
+
+# Create teacher and student models with the same pretrained base
+teacher_model = build_resnet(teacher=True, pretrained_model=loaded_model)
+student_model = build_resnet(teacher=False, pretrained_model=loaded_model)
 # Compile the Defensive Distillation model
 student_model.compile(optimizer='adam', metrics=['accuracy'])
+
+# Print the layers to check for discrepancies
+print("\nTeacher Model Layers:")
+for layer in teacher_model.layers:
+    print(layer.name)
+
+print("\nStudent Model Layers:")
+for layer in student_model.layers:
+    print(layer.name)
+
+# Adjust layer names if needed
+for layer in student_model.layers[:-2]:
+    teacher_layer_name = layer.name
+    if teacher_layer_name not in [l.name for l in teacher_model.layers]:
+        # If the layer name is not found in the teacher model, try to find a similar layer
+        matching_layer_names = [l.name for l in teacher_model.layers if layer.name in l.name]
+        if matching_layer_names:
+             teacher_layer_name = matching_layer_names[0]
+             print(f"Adjusted layer name for {layer.name} to {teacher_layer_name}")
+
+    pretrained_layer = teacher_model.get_layer(teacher_layer_name)
+    layer.set_weights(pretrained_layer.get_weights())
+    layer.trainable = False
 
 def defensive_distillation(teacher_model, student_model, train_images, train_labels, teacher_temperature, student_temperature, epochs, batch_size):
     optimizer = tf.keras.optimizers.Adam()
@@ -74,15 +137,17 @@ def defensive_distillation(teacher_model, student_model, train_images, train_lab
             batch_labels = train_labels[batch_start:batch_start + batch_size]
 
             with tf.GradientTape() as tape:
-                teacher_logits = teacher_model(batch_images)
-                teacher_probs = tf.nn.softmax(teacher_logits / teacher_temperature)
-                student_logits = student_model(batch_images)
-                loss = loss_object(teacher_probs, tf.nn.softmax(student_logits / student_temperature))
+                # Compute teacher probabilities (softened)
+                teacher_probs = tf.nn.softmax(teacher_model(batch_images) / teacher_temperature)
+                # Compute student probabilities (softened)
+                student_probs = tf.nn.softmax(student_model(batch_images) / student_temperature)
+                # Use soft labels for training the student model
+                loss = loss_object(teacher_probs, student_probs)
 
             gradients = tape.gradient(loss, student_model.trainable_variables)
             optimizer.apply_gradients(zip(gradients, student_model.trainable_variables))
 
-           # Evaluate accuracy after each batch
+            # Evaluate accuracy after each batch
             metrics_values = student_model.evaluate(batch_images, batch_labels, verbose=0)
             metrics_names = student_model.metrics_names
             metrics_dict = dict(zip(metrics_names, metrics_values))
@@ -91,32 +156,21 @@ def defensive_distillation(teacher_model, student_model, train_images, train_lab
 
     return student_model
 
-# Example usage:
-teacher_temperature = 10
-student_temperature = 5
-epochs = 10
-batch_size = 256
+
+
 
 # Training hyperparameters
-epsilon_fgsm = 0.3
+epsilon_fgsm = 0.03
 
-# Defensive Distillation
-#Defensive_Distillation_Model = defensive_distillation(teacher_model, student_model, train_images, train_labels, temperature, epochs, batch_size)
-
-# Compile
-#Defensive_Distillation_Model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
-
-
-# Evaluate the model with FGSM attack on the test data
-#test_images_adv_defense = fgsm_attack(Defensive_Distillation_Model, test_images, test_labels, epsilon_fgsm, temperature)
-
-# Evaluate the model on the adversarial examples
-#test_loss_adv_defense, test_accuracy_adv_defense = Defensive_Distillation_Model.evaluate(test_images_adv_defense, test_labels)
-#print(f"Test accuracy of a Defensive Distillation Trained Model with FGSM attack: {test_accuracy_adv_defense}")
 
 # Defensive Distillation
 Defensive_Distillation_Model = defensive_distillation(teacher_model, student_model, train_images, train_labels, teacher_temperature, student_temperature, epochs, batch_size)
+# Evaluate the model with FGSM attack on the test data
+# Does a FGSM attack on the already trained model
+test_images_adv = fgsm_attack(Defensive_Distillation_Model, test_images, test_labels, epsilon_fgsm, student_temperature)
+# Evaluates the accuracy of it
+test_loss_adv, test_accuracy_adv = Defensive_Distillation_Model.evaluate(test_images_adv, test_labels, verbose=0)
 
-# Evaluate the model on the test data
-test_loss_defense, test_accuracy_defense = Defensive_Distillation_Model.evaluate(test_images, test_labels)
-print(f"Test accuracy of a Defensive Distillation Trained Model: {test_accuracy_defense}")
+print(f"Test accuracy of the ResNet Model with FGSM attack: {test_accuracy_adv}")
+
+
