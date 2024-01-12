@@ -34,9 +34,9 @@ def build_resnet(teacher=False, pretrained_model=None):
         x = layers.MaxPooling2D((2, 2))(x)
         x = layers.GlobalAveragePooling2D()(x)
 
-    if not teacher:
-        x = layers.Dense(256, activation='relu')(x)
-        x = layers.Dropout(0.25)(x)
+#    if not teacher:
+#        x = layers.Dense(256, activation='relu')(x)
+#        x = layers.Dropout(0.25)(x)
 
     predictions = layers.Dense(10, activation='softmax')(x)
 
@@ -71,8 +71,8 @@ def fgsm_attack(model, x, y_true, epsilon, temperature):
 
 epochs_regular = 5
 # Example usage:
-teacher_temperature = 10
-student_temperature = 5
+teacher_temperature = 15
+student_temperature = 10
 epochs = 2
 batch_size = 256
 
