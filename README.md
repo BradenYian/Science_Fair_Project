@@ -1,5 +1,4 @@
 
-
 # Science_Fair_Project
 
 Adversarial learning is a machine learning paradigm where the model is trained to be robust against adversarial examples. Adversarial examples are inputs specifically crafted to deceive the model and cause misclassification. Defending against adversarial attacks is crucial for the deployment of machine learning models in real-world scenarios. Here's a literature review on defense methods for adversarial learning:
