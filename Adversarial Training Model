@@ -1,50 +1,50 @@
-#OneDrive - Ten-Personal - Documents - Python Scripts - Server
-#Open Workspace from file
-#import tensorflow as tf
+Adversarial Training:
+import tensorflow as tf
 from tensorflow.keras import datasets, models, layers
 from tensorflow.keras.applications import ResNet50V2
 from tensorflow.keras.utils import to_categorical
 import datetime
 import matplotlib.pyplot as plt
+from tensorflow.keras.datasets import mnist
+from tensorflow.image import resize
+import numpy as np
 
-# Define a learning rate schedule
-def lr_schedule(epoch):
-    initial_learning_rate = 0.001
-    if epoch < 10:
-        return initial_learning_rate
-    elif epoch < 20:
-        return initial_learning_rate * 0.1
-    else:
-        return initial_learning_rate * 0.01
 
-# Custom callback to track the best accuracy
-class BestAccuracyCallback(tf.keras.callbacks.Callback):
-    def __init__(self):
-        super(BestAccuracyCallback, self).__init__()
-        self.best_accuracy = -1  # Initialize with a low value
-
-    def on_epoch_end(self, epoch, logs=None):
-        test_accuracy = logs.get("val_accuracy")
-        if test_accuracy > self.best_accuracy:
-            self.best_accuracy = test_accuracy
-            print(f"Epoch {epoch + 1}: Best Test Accuracy = {test_accuracy}")
-
-best_accuracy_callback = BestAccuracyCallback()
-
-# Load CIFAR-10 dataset
-(train_images, train_labels), (test_images, test_labels) = datasets.cifar10.load_data()
+# Load MNIST dataset
+(train_images, train_labels), (test_images, test_labels) = mnist.load_data()
 train_images, test_images = train_images / 255.0, test_images / 255.0
-train_labels, test_labels = to_categorical(train_labels, num_classes=10), to_categorical(test_labels, num_classes=10)
 
-# Define ResNet model
+
+train_images = tf.image.grayscale_to_rgb(tf.image.resize(train_images[..., tf.newaxis], (32, 32)))
+test_images = tf.image.grayscale_to_rgb(tf.image.resize(test_images[..., tf.newaxis], (32, 32)))
+
+
+# Convert labels to one-hot encoded format
+train_labels = to_categorical(train_labels, num_classes=10)
+test_labels = to_categorical(test_labels, num_classes=10)
+
+
 def build_resnet():
-    base_model = ResNet50V2(weights='imagenet', include_top=False, input_shape=(32, 32, 3))
-    x = layers.BatchNormalization()(base_model.output)
-    x = layers.GlobalAveragePooling2D()(base_model.output)
-    x = layers.Dense(10, activation='relu')(x)
+    model_input = layers.Input(shape=(32, 32, 3))
+    x = layers.Conv2D(32, (3, 3), activation='relu')(model_input)
+    x = layers.BatchNormalization()(x)
+    x = layers.MaxPooling2D((2, 2))(x)
+   
+    x = layers.Conv2D(64, (3, 3), activation='relu')(x)
+    x = layers.BatchNormalization()(x)
+    x = layers.MaxPooling2D((2, 2))(x)
+
+
+    x = layers.GlobalAveragePooling2D()(x)
+   
+    x = layers.Dense(256, activation='relu')(x)
+    x = layers.Dropout(0.25)(x)
+   
     predictions = layers.Dense(10, activation='softmax')(x)
-    model = models.Model(inputs=base_model.input, outputs=predictions)
+   
+    model = models.Model(inputs=model_input, outputs=predictions)
     return model
+
 
 # Define FGSM attack
 def fgsm_attack(model, x, y_true, epsilon):
@@ -59,10 +59,11 @@ def fgsm_attack(model, x, y_true, epsilon):
     x_adv = tf.clip_by_value(x_adv, 0, 1)
     return x_adv
 
-batch_size = 32
-def adversarial_training(model, train_images, train_labels, epsilon, epochs, batch_size, best_accuracy_callback):
+
+def adversarial_training(model, train_images, train_labels, epsilon, epochs, batch_size):
     optimizer = tf.keras.optimizers.Adam(learning_rate=0.001)
     loss_object = tf.keras.losses.CategoricalCrossentropy()
+
 
     for epoch in range(epochs):
         print(f"Epoch {epoch + 1}/{epochs}")
@@ -70,59 +71,71 @@ def adversarial_training(model, train_images, train_labels, epsilon, epochs, bat
             batch_images = train_images[batch_start:batch_start + batch_size]
             batch_labels = train_labels[batch_start:batch_start + batch_size]
 
+
             with tf.GradientTape() as tape:
                 predictions = model(batch_images)
                 loss = loss_object(batch_labels, predictions)
 
+
             gradients = tape.gradient(loss, model.trainable_variables)
             optimizer.apply_gradients(zip(gradients, model.trainable_variables))
 
+
             x_adv = fgsm_attack(model, batch_images, batch_labels, epsilon)
+
 
             with tf.GradientTape() as tape:
                 predictions_adv = model(x_adv)
                 loss_adv = loss_object(batch_labels, predictions_adv)
 
+
             gradients_adv = tape.gradient(loss_adv, model.trainable_variables)
             optimizer.apply_gradients(zip(gradients_adv, model.trainable_variables))
 
+
             print(f"Batch {batch_start // batch_size + 1}/{len(train_images) // batch_size}")
 
+
+    return model
+
+
 # Training hyperparameters
-epsilon_fgsm = 0.1  # FGSM perturbation level
-epochs = 1
+epsilon_fgsm = 0.03  # FGSM perturbation level
+epochs_regular = 5
+epochs_adversarial = 2
+batch_size = 256
+
 
 # Build ResNet model
 resnet_model = build_resnet()
 resnet_model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
 
+
+# Train and evaluate the model before adversarial training
+print("Training and evaluating the ResNet Model before adversarial training:")
+history = resnet_model.fit(train_images, train_labels, epochs=epochs_regular, batch_size=batch_size, verbose=1)
+test_loss, test_accuracy = resnet_model.evaluate(test_images, test_labels, verbose=0)
+print(f"Test accuracy of the ResNet Model before adversarial training: {test_accuracy}")
+
+
+# Save the entire model after regular training
+model_file_path = r'C:\Users\eyian\OneDrive\Desktop\clean_model.h5'
+resnet_model.save(model_file_path)
+
+
+# Load the saved model for adversarial training
+loaded_model = tf.keras.models.load_model(model_file_path)
+
+
 # Perform adversarial training
-#Starts training and prints each batch
-Advesarially_trained_model = adversarial_training(resnet_model, train_images, train_labels, epsilon_fgsm, epochs, batch_size, best_accuracy_callback)
+adversarially_trained_model = adversarial_training(loaded_model, train_images, train_labels, epsilon_fgsm, epochs_adversarial, batch_size)
+
 
 # Evaluate the model with FGSM attack on the test data
-#Does a FGSM attack on the already trained model
-test_images_adv = fgsm_attack(Advesarially_trained_model, test_images, test_labels, epsilon_fgsm)
-#Evaluates the accuracy of it
-test_loss_adv, test_accuracy_adv = Advesarially_trained_model.evaluate(test_images_adv, test_labels)
-
-print(f"Test accuracy of the Resnet Model with FGSM attack: {test_accuracy_adv}")
+# Does a FGSM attack on the already trained model
+test_images_adv = fgsm_attack(adversarially_trained_model, test_images, test_labels, epsilon_fgsm)
+# Evaluates the accuracy of it
+test_loss_adv, test_accuracy_adv = adversarially_trained_model.evaluate(test_images_adv, test_labels)
 
 
-
-# Visualize some adversarial examples
-num_examples = 5
-for i in range(num_examples):
-    original_image = test_images[i]
-    adversarial_image = test_images_adv[i]
-
-    plt.subplot(2, num_examples, i + 1)
-    plt.imshow(original_image)
-    plt.title("Original")
-
-    plt.subplot(2, num_examples, i + num_examples + 1)
-    plt.imshow(adversarial_image)
-    plt.title("Adversarial")
-
-plt.show()
-
+print(f"Test accuracy of the ResNet Model with FGSM attack: {test_accuracy_adv}")
