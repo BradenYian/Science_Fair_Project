@@ -1,4 +1,3 @@
-Defensive Distillation
 import tensorflow as tf
 from tensorflow.keras import datasets, models, layers
 from tensorflow.keras.applications import ResNet50V2
