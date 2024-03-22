@@ -1,0 +1,96 @@
+import tensorflow as tf
+from tensorflow.keras import layers, models
+from tensorflow.keras.applications import ResNet50V2
+from tensorflow.keras.applications.resnet_v2 import preprocess_input
+from tensorflow.keras.datasets import cifar10
+import numpy as np
+from tensorflow.keras.utils import to_categorical
+from tensorflow.keras.datasets import mnist
+
+
+#MINST Dataset
+(train_images, train_labels), (test_images, test_labels) = mnist.load_data()
+train_images, test_images = train_images / 255.0, test_images / 255.0
+
+
+train_images = tf.image.grayscale_to_rgb(tf.image.resize(train_images[..., tf.newaxis], (32, 32)))
+test_images = tf.image.grayscale_to_rgb(tf.image.resize(test_images[..., tf.newaxis], (32, 32)))
+
+
+# Convert your labels to one-hot encoded format
+train_labels = to_categorical(train_labels, num_classes=10)
+test_labels = to_categorical(test_labels, num_classes=10)
+
+
+# Define ResNet model
+def build_resnet():
+    model_input = layers.Input(shape=(32, 32, 3))
+   
+    x = layers.Conv2D(32, (3, 3), activation='relu')(model_input)
+    x = layers.BatchNormalization()(x)
+    x = layers.MaxPooling2D((2, 2))(x)
+   
+    x = layers.Conv2D(64, (3, 3), activation='relu')(x)
+    x = layers.BatchNormalization()(x)
+    x = layers.MaxPooling2D((2, 2))(x)
+
+
+    x = layers.GlobalAveragePooling2D()(x)
+   
+    x = layers.Dense(256, activation='relu')(x)
+    x = layers.Dropout(0.25)(x)
+   
+    predictions = layers.Dense(10, activation='softmax')(x)
+   
+    model = models.Model(inputs=model_input, outputs=predictions)
+    return model
+
+
+# Build ResNet model
+model = build_resnet()
+
+
+# Compile the model
+model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
+
+
+# Train the model
+batch_size = 256
+epochs = 7  # Adjust the number of epochs as needed
+
+
+model.fit(train_images, train_labels, batch_size=batch_size, epochs=epochs, validation_data=(test_images, test_labels))
+
+
+# FGSM attack parameters
+epsilon = 0.03  # Adjust the epsilon value to control the perturbation level
+
+
+# Define FGSM attack
+def fgsm_attack(model, x, y_true, epsilon):
+    loss_object = tf.keras.losses.CategoricalCrossentropy()
+    input_data = tf.convert_to_tensor(x)
+    with tf.GradientTape() as tape:
+        tape.watch(input_data)
+        prediction = model(input_data)
+        loss = loss_object(y_true, prediction)
+    gradient = tape.gradient(loss, input_data)
+    x_adv = input_data + epsilon * tf.sign(gradient)
+    x_adv = tf.clip_by_value(x_adv, 0, 1)
+    return x_adv
+
+
+# Perform FGSM attack on the test set
+# Perform FGSM attack on the test set
+adversarial_images = fgsm_attack(model, test_images, test_labels, epsilon)
+
+
+# Make predictions on the adversarial images
+predictions = model(adversarial_images)
+predicted_classes = np.argmax(predictions, axis=1)
+
+
+# Compare predicted classes to the original test labels to evaluate model robustness
+correctly_classified = np.sum(predicted_classes == np.argmax(test_labels, axis=1))
+accuracy = correctly_classified / len(test_labels)
+print("Adversarial Accuracy:", accuracy)
